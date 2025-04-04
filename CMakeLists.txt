@@ -30,6 +30,7 @@ set(BUILD_TESTING OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Add these lines
+add_compile_options(-fclang-abi-compat=17)  # Fixes Clang 19 ↔ Abseil symbol issues
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-as-needed")
 

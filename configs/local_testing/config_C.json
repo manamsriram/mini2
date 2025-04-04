@@ -5,32 +5,20 @@
     "is_entry_point": false,
     "network": [
       {
-        "id": "A",
-        "address": "127.0.0.1",
-        "port": 50051,
-        "connections": ["B"]
-      },
-      {
         "id": "B",
-        "address": "127.0.0.1",
+        "address": "localhost",
         "port": 50052,
         "connections": ["C", "D"]
       },
       {
         "id": "C",
-        "address": "127.0.0.1",
+        "address": "localhost",
         "port": 50053,
         "connections": ["E"]
       },
       {
-        "id": "D",
-        "address": "127.0.0.1",
-        "port": 50054,
-        "connections": ["E"]
-      },
-      {
         "id": "E",
-        "address": "127.0.0.1",
+        "address": "localhost",
         "port": 50055,
         "connections": []
       }
