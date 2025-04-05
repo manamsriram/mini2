@@ -2,5 +2,10 @@
     "files.associations": {
         "*.embeddedhtml": "html",
         "iostream": "cpp"
-    }
+    },
+    "C_Cpp.errorSquiggles": "disabled",
+    "python.analysis.extraPaths": [
+        "./python/src/mini2_pb2_",
+        "./python/src/mini2_pb2_"
+    ]
 }

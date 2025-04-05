@@ -27,6 +27,12 @@
         "address": "localhost",
         "port": 50054,
         "connections": ["E"]
+      },
+      {
+        "id": "E",
+        "address": "localhost",
+        "port": 50055,
+        "connections": []
       }
     ]
 }

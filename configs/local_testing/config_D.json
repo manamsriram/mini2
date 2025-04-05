@@ -5,10 +5,22 @@
     "is_entry_point": false,
     "network": [
       {
+        "id": "A",
+        "address": "localhost",
+        "port": 50051,
+        "connections": ["B"]
+      },
+      {
         "id": "B",
         "address": "localhost",
         "port": 50052,
         "connections": ["C", "D"]
+      },
+      {
+        "id": "C",
+        "address": "localhost",
+        "port": 50053,
+        "connections": ["E"]
       },
       {
         "id": "D",
