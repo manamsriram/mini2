@@ -24,15 +24,6 @@
 #include "proto/mini2.pb.h"
 #include "parser/CSV.h"
 
-#include <google/protobuf/util/json_util.h>
-
-std::ostream& operator<<(std::ostream& os, const mini2::InterServerService::Stub& stub) {
-    // Implement custom printing logic
-    os << "InterServerServiceStub";
-    return os;
-}
-
-
 using json = nlohmann::json;
 using grpc::Channel;
 using grpc::ClientContext;
@@ -40,13 +31,10 @@ using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::Status;
-using mini2::CollisionBatch;
 using mini2::CollisionData;
-using mini2::DatasetInfo;
 using mini2::Empty;
 using mini2::EntryPointService;
 using mini2::InterServerService;
-using mini2::RiskAssessment;
 
 constexpr int MAX_MESSAGE_SIZE = 1024; // Maximum size (in bytes) per message.
 constexpr int NUM_SLOTS = 100;         // Number of fixed slots in the buffer.
@@ -71,7 +59,7 @@ struct SharedMemoryBuffer
 };
 
 // Booleans for testing failure of shared memory and grpc
-static bool g_simulate_shm_failure = true;
+static bool g_simulate_shm_failure = false;
 static bool g_simulate_grpc_failure = false;
 
 class SysVSharedMemoryManager
@@ -191,6 +179,7 @@ struct ProcessNode
 class GenericServer : public EntryPointService::Service, public InterServerService::Service
 {
 private:
+    std::mutex stub_mutex_;
     // Server configuration.
     std::string server_id;
     std::string server_address;
@@ -207,7 +196,7 @@ private:
     std::vector<std::thread> readerThreads;
 
     // gRPC stubs for connections to other servers.
-    std::map<std::string, std::unique_ptr<InterServerService::Stub>> server_stubs;
+    std::map<std::string, std::shared_ptr<InterServerService::Stub>> server_stubs;
 
     // Data distribution counters.
 
@@ -257,25 +246,21 @@ private:
         return data.ParseFromString(msg);
     }
 
+
+
     // Initialize a gRPC channel (stub) to another server.
-    void initServerStub(const std::string &srv_id)
+    void initServerStub(const std::string &server_id)
     {
-        if (network_nodes.find(srv_id) != network_nodes.end())
-        {
-            std::string target_address = network_nodes[srv_id].address + ":" +
-                                         std::to_string(network_nodes[srv_id].port);
-            auto channel = grpc::CreateChannel(target_address, grpc::InsecureChannelCredentials());
-            server_stubs[srv_id] = InterServerService::NewStub(channel);
-            std::cout << "Created channel to server " << srv_id << " at " << target_address << std::endl;
-        }
+        std::string server_address = network_nodes[server_id].address + ":" +
+                                     std::to_string(network_nodes[server_id].port);
+        auto channel = grpc::CreateChannel(server_address, grpc::InsecureChannelCredentials());
+        server_stubs[server_id] = InterServerService::NewStub(channel);
     }
 
     // Forward data to a connected server via gRPC.
-    void forwardDataToServer(const std::string &srv_id, const CollisionBatch &batch)
+    void forwardDataToServer(const std::string &srv_id, const CollisionData &collision)
     {
         // Ensure the stub for the target server exists.
-        std::cout << "Forwarding data to server " << srv_id << std::endl;
-
         if (server_stubs.find(srv_id) == server_stubs.end() || !server_stubs[srv_id])
         {
             std::cerr << "ERROR: GRPC stub for server " << srv_id << " is null. Attempting to reinitialize." << std::endl;
@@ -289,20 +274,17 @@ private:
         // std::cout << "Received data from another server" << srv_id<<std::endl;
         ClientContext context;
         Empty response;
-        std::cout<< "poineter value"<< *(server_stubs[srv_id])<<std::endl;
-        std::cout << " data to server " << srv_id << std::endl;
-        // std::cout<<server_stubs[srv_id]->ForwardData(&context, batch, &response)<<std::endl;
-        Status status = server_stubs[srv_id]->ForwardData(&context, batch, &response);
+        Status status = server_stubs[srv_id]->ForwardData(&context, collision, &response);
         if (!status.ok())
         {
             std::cerr << "Failed to forward data to " << srv_id << ": " << status.error_message() << std::endl;
-        }
+        }   
     }
 
     size_t getHash(const CollisionData &data)
     {
-        std::string key = data.borough() + data.zip_code() +
-                          data.on_street_name() + data.cross_street_name();
+        std::string key = data.borough() + data.zip_code() + data.crash_date() +
+                          data.crash_time();
         size_t hash_value = std::hash<std::string>{}(key);
         static std::random_device rd;
         static std::mt19937 gen(rd());
@@ -336,10 +318,6 @@ private:
     // Choose target server for routing.
     std::string chooseTargetServer(size_t hash_value)
     {
-        if (shouldKeepLocally(hash_value))
-        {
-            return ""; // Keep locally.
-        }
         std::vector<std::string> ordered_nodes;
         for (const auto &node_pair : network_nodes)
         {
@@ -428,7 +406,6 @@ private:
                     {
                         if (collision.ParseFromString(msg))
                         {
-
                             // For testing, we simply drain the message.
                             drainCount++;
                             total_records_seen.fetch_add(1, std::memory_order_relaxed);
@@ -464,9 +441,7 @@ private:
                                     // Fallback (e.g., via gRPC).
                                     if (!g_simulate_grpc_failure)
                                     {
-                                        CollisionBatch batch;
-                                        *batch.add_collisions() = collision;
-                                        forwardDataToServer(target_server, batch);
+                                        forwardDataToServer(target_server, collision);
                                         {
                                             std::lock_guard<std::mutex> lock(metricsMutex);
                                             records_forwarded[target_server]++;
@@ -719,9 +694,7 @@ public:
                 {
                     if (!g_simulate_grpc_failure)
                     {
-                        CollisionBatch batch;
-                        *batch.add_collisions() = collision;
-                        forwardDataToServer(target_server, batch);
+                        forwardDataToServer(target_server, collision);
                         if (count % 500 == 0)
                         {
                             std::cout << "Data sent via gRPC to " << target_server << std::endl;
@@ -758,59 +731,39 @@ public:
 
     // Handles forwarded data from other servers via GRPC
     Status ForwardData(ServerContext *context,
-                       const CollisionBatch *batch,
+                       const CollisionData *collision,
                        Empty *response) override
     {
         std::cout << "Received data from another server" << std::endl;
-        int batch_size = batch->collisions_size();
-        std::cout << "Node " << server_id << ": ForwardData called with "
-                  << batch->collisions_size() << " collisions." << std::endl;
-        std::cout << "Received forwarded batch with " << batch_size << " records" << std::endl;
-        total_records_seen += batch_size;
-        for (int i = 0; i < batch_size; i++)
+        total_records_seen += 1;
+        size_t hash_value = getHash(*collision);
+        if (shouldKeepLocally(hash_value))
         {
-            const CollisionData &collision = batch->collisions(i);
-            size_t hash_value = getHash(collision);
-            if (shouldKeepLocally(hash_value))
+            records_kept_locally++;
+            std::cout<<collision->borough()<<"  "<<collision->zip_code()<<"  "<<collision->crash_date()<<"  "<<collision->crash_time()<<std::endl;
+            return Status::OK;//process collision data
+        }
+        std::string target_server = chooseTargetServer(hash_value);
+        if (!target_server.empty())
+        {
+            records_forwarded[target_server]++;
+            if (writeToSharedMemory(target_server, *collision))
             {
-                records_kept_locally++;
-                std::cout << "Record kept locally based on content hash" << std::endl;
-                continue;
+                std::cout << "Data written to shared memory for " << target_server << std::endl;
             }
-            std::string target_server = chooseTargetServer(hash_value);
-            if (!target_server.empty())
+            else
             {
-                records_forwarded[target_server]++;
-                if (writeToSharedMemory(target_server, collision))
+                if (!g_simulate_grpc_failure)
                 {
-                    std::cout << "Data written to shared memory for " << target_server << std::endl;
+                    forwardDataToServer(target_server, *collision);
                 }
                 else
                 {
-                    if (!g_simulate_grpc_failure)
-                    {
-                        CollisionBatch new_batch;
-                        *new_batch.add_collisions() = collision;
-                        forwardDataToServer(target_server, new_batch);
-                    }
-                    else
-                    {
-                        std::cout << "Record Batch Skipped" << std::endl;
-                    }
+                    std::cout << "Record Batch Skipped" << std::endl;
                 }
             }
         }
         reportEnhancedDistributionStats();
-        return Status::OK;
-    }
-
-    // Handle sharing of analysis results.
-    Status ShareAnalysis(ServerContext *context,
-                         const RiskAssessment *assessment,
-                         Empty *response) override
-    {
-        std::cout << "Received risk assessment for " << assessment->borough()
-                  << " " << assessment->zip_code() << std::endl;
         return Status::OK;
     }
 
@@ -825,79 +778,7 @@ public:
     {
         return entry_point_flag;
     }
-
-    // RPC to set dataset info.
-    Status SetDatasetInfo(ServerContext *context,
-                          const DatasetInfo *info,
-                          Empty *response) override
-    {
-        total_dataset_size = info->total_size();
-        std::cout << "Received dataset size information: " << total_dataset_size << " records" << std::endl;
-        broadcastDatasetSize();
-        return Status::OK;
-    }
-
-private:
-    // Forward dataset size to all connected servers.
-    void broadcastDatasetSize()
-    {
-        if (!entry_point_flag)
-            return;
-        DatasetInfo info;
-        info.set_total_size(total_dataset_size);
-        for (const std::string &srv_id : connections)
-        {
-            if (server_stubs.find(srv_id) == server_stubs.end())
-            {
-                initServerStub(srv_id);
-            }
-            ClientContext context;
-            Empty response;
-            Status status = server_stubs[srv_id]->SetTotalDatasetSize(&context, info, &response);
-            if (status.ok())
-            {
-                std::cout << "Forwarded dataset size to server " << srv_id << std::endl;
-            }
-            else
-            {
-                std::cerr << "Failed to forward dataset size to " << srv_id << std::endl;
-            }
-        }
-    }
-
-    // RPC to set total dataset size.
-    Status SetTotalDatasetSize(ServerContext *context,
-                               const DatasetInfo *info,
-                               Empty *response) override
-    {
-        total_dataset_size = info->total_size();
-        std::cout << "Received total dataset size from another server: "
-                  << total_dataset_size << " records" << std::endl;
-        for (const std::string &srv_id : connections)
-        {
-            std::string peer = context->peer();
-            if (peer.find(network_nodes[srv_id].address) != std::string::npos)
-            {
-                continue;
-            }
-            if (server_stubs.find(srv_id) == server_stubs.end())
-            {
-                initServerStub(srv_id);
-            }
-            ClientContext new_context;
-            Empty new_response;
-            Status status = server_stubs[srv_id]->SetTotalDatasetSize(&new_context, *info, &new_response);
-            if (status.ok())
-            {
-                std::cout << "Forwarded dataset size to server " << srv_id << std::endl;
-            }
-            else
-            {
-                std::cerr << "Failed to forward dataset size to " << srv_id << std::endl;
-            }
-        }
-        return Status::OK;
-    }
+    
 };
 
 // ---------------------------------------------------------------------------

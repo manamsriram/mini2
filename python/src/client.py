@@ -6,7 +6,7 @@ import mini2_pb2
 import mini2_pb2_grpc
 
 class CollisionDataClient:
-    def __init__(self, server_address='localhost:50051'):
+    def __init__(self, server_address='localhost:50056'):
         self.server_address = server_address
         # Create gRPC channel
         self.channel = grpc.insecure_channel(server_address)
@@ -21,12 +21,6 @@ class CollisionDataClient:
                 crash_time=row['CRASH TIME'],
                 borough=row['BOROUGH'],
                 zip_code=row['ZIP CODE'],
-                latitude=float(row['LATITUDE']) if row['LATITUDE'] else 0.0,
-                longitude=float(row['LONGITUDE']) if row['LONGITUDE'] else 0.0,
-                location=row['LOCATION'],
-                on_street_name=row['ON STREET NAME'],
-                cross_street_name=row['CROSS STREET NAME'],
-                off_street_name=row['OFF STREET NAME'],
                 number_of_persons_injured=int(row['NUMBER OF PERSONS INJURED']),
                 number_of_persons_killed=int(row['NUMBER OF PERSONS KILLED']),
                 number_of_pedestrians_injured=int(row['NUMBER OF PEDESTRIANS INJURED']),
@@ -71,32 +65,6 @@ class CollisionDataClient:
             print(f"An unexpected error occurred: {e}")
         finally:
             self.channel.close()
-
-    def run_client(self, dataset_path):
-        # Load the dataset
-        dataset = self.load_dataset(dataset_path)  # Your dataset loading function
-        dataset_size = len(dataset)
-        
-        # First, send dataset size information
-        print(f"Sending dataset size: {dataset_size} records")
-        info = mini2_pb2.DatasetInfo(total_size=dataset_size)
-        self.stub.SetDatasetInfo(info)
-        
-        # Now stream the collision data
-        print("Starting to stream collision data...")
-        response = self.stub.StreamCollisions(self.generate_collision_data(dataset))
-        print("Finished streaming data")
-
-    def generate_collision_data(self, dataset):
-        # Generate data records from your dataset
-        for record in dataset:
-            collision = mini2_pb2.CollisionData(
-                crash_date=record['crash_date'],
-                crash_time=record['crash_time'],
-                borough=record['borough'],
-                # ...other fields...
-            )
-            yield collision
 
 def main():
     # Create client instance

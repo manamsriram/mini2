@@ -1,23 +1,22 @@
 cmake_minimum_required(VERSION 3.10)
 
-# Force gcc/g++ before project declaration
-# set(CMAKE_C_COMPILER "/usr/local/bin/gcc-14" CACHE STRING "C compiler" FORCE)
-#set(CMAKE_CXX_COMPILER "/usr/local/bin/g++-14" CACHE STRING "C++ compiler" FORCE)
-
-# Force CMake to use Homebrew's Clang before declaring the project
-# set(CMAKE_C_COMPILER "/usr/local/opt/llvm/bin/clang" CACHE STRING "C compiler" FORCE)
-# set(CMAKE_CXX_COMPILER "/usr/local/opt/llvm/bin/clang++" CACHE STRING "C++ compiler" FORCE)
-
-# Set LLVM Clang-specific flags
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++ -nostdinc++ -I/usr/local/opt/llvm/include/c++/v1")
-# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L/usr/local/opt/llvm/lib -Wl,-rpath,/usr/local/opt/llvm/lib")
-
-
 project(Mini2)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Debug flags
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0 -Wall -Wextra -Wpedantic")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -O0 -Wall -Wextra -Wpedantic")
+
+# Enable gRPC debug logging in Debug mode
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_compile_definitions(
+    GRPC_VERBOSITY=DEBUG
+    GRPC_TRACE=all
+  )
+endif()
 
 # Add this line to help find abseil
 set(ABSL_PROPAGATE_CXX_STD ON)
@@ -33,6 +32,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_compile_options(-fclang-abi-compat=17)  # Fixes Clang 19 ↔ Abseil symbol issues
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-as-needed")
+
+# Find OpenSSL explicitly
+find_package(OpenSSL REQUIRED)
 
 # Find required packages
 find_package(Threads REQUIRED)
@@ -92,11 +94,19 @@ set(SERVER_SRC
 add_executable(server ${SERVER_SRC})
 add_dependencies(server generate_proto_files)
 
+# Add debug symbols even in Release mode for better crash reports
+target_compile_options(server PRIVATE 
+  $<$<CONFIG:Debug>:-g3 -ggdb3>
+  $<$<CONFIG:RelWithDebInfo>:-g -O2>
+)
+
 # Link libraries
 target_link_libraries(server PRIVATE
     gRPC::grpc++
     gRPC::grpc++_reflection
     protobuf::libprotobuf
+    OpenSSL::SSL
+    OpenSSL::Crypto
     absl::flags
     absl::flags_parse
     absl::flags_reflection
@@ -138,4 +148,12 @@ include_directories(
     ${Protobuf_INCLUDE_DIRS}
     ${gRPC_INCLUDE_DIRS}
     ${ABSL_INCLUDE_DIRS}
+    ${OPENSSL_INCLUDE_DIR}
 )
+
+# Add address sanitizer in Debug mode for memory error detection
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  target_compile_options(server PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+  target_link_options(server PRIVATE -fsanitize=address)
+endif()
+

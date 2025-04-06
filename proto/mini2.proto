@@ -49,43 +49,16 @@ message AnalysisRecord {
     int32 persons_killed = 5;
 }
 
-// For batching data
-message CollisionBatch {
-    repeated CollisionData collisions = 1;
-}
-
-// For analysis results
-message RiskAssessment {
-    string borough = 1;
-    string zip_code = 2;
-    int32 total_injuries = 3;
-    int32 total_fatalities = 4;
-}
-
-// Add this new message
-message DatasetInfo {
-    int64 total_size = 1;
-}
-
 // Service for Python client → Server A communication
 service EntryPointService {
     // Defines how clients stream data to Server A
     rpc StreamCollisions(stream CollisionData) returns (Empty) {}
-    
-    // Add new method to set dataset size
-    rpc SetDatasetInfo(DatasetInfo) returns (Empty) {}
 }
 
 // Service for inter-server communication (A,B,C,D,E)
 service InterServerService {
     // Forward data between servers
-    rpc ForwardData(CollisionBatch) returns (Empty) {}
-    
-    // Share analysis results
-    rpc ShareAnalysis(RiskAssessment) returns (Empty) {}
-    
-    // Add new method
-    rpc SetTotalDatasetSize(DatasetInfo) returns (Empty) {}
+    rpc ForwardData(CollisionData) returns (Empty) {}
 }
 
 message Empty {}
