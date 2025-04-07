@@ -40,6 +40,11 @@ class EntryPointServiceStub(object):
                 request_serializer=mini2__pb2.CollisionData.SerializeToString,
                 response_deserializer=mini2__pb2.Empty.FromString,
                 _registered_method=True)
+        self.SignalCompletion = channel.unary_unary(
+                '/mini2.EntryPointService/SignalCompletion',
+                request_serializer=mini2__pb2.Empty.SerializeToString,
+                response_deserializer=mini2__pb2.Empty.FromString,
+                _registered_method=True)
 
 
 class EntryPointServiceServicer(object):
@@ -53,12 +58,23 @@ class EntryPointServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SignalCompletion(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_EntryPointServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'StreamCollisions': grpc.stream_unary_rpc_method_handler(
                     servicer.StreamCollisions,
                     request_deserializer=mini2__pb2.CollisionData.FromString,
+                    response_serializer=mini2__pb2.Empty.SerializeToString,
+            ),
+            'SignalCompletion': grpc.unary_unary_rpc_method_handler(
+                    servicer.SignalCompletion,
+                    request_deserializer=mini2__pb2.Empty.FromString,
                     response_serializer=mini2__pb2.Empty.SerializeToString,
             ),
     }
@@ -100,6 +116,33 @@ class EntryPointService(object):
             metadata,
             _registered_method=True)
 
+    @staticmethod
+    def SignalCompletion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/mini2.EntryPointService/SignalCompletion',
+            mini2__pb2.Empty.SerializeToString,
+            mini2__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
 
 class InterServerServiceStub(object):
     """Service for inter-server communication (A,B,C,D,E)
@@ -116,6 +159,11 @@ class InterServerServiceStub(object):
                 request_serializer=mini2__pb2.CollisionData.SerializeToString,
                 response_deserializer=mini2__pb2.Empty.FromString,
                 _registered_method=True)
+        self.PropagateCompletion = channel.unary_unary(
+                '/mini2.InterServerService/PropagateCompletion',
+                request_serializer=mini2__pb2.Empty.SerializeToString,
+                response_deserializer=mini2__pb2.Empty.FromString,
+                _registered_method=True)
 
 
 class InterServerServiceServicer(object):
@@ -129,12 +177,23 @@ class InterServerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PropagateCompletion(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_InterServerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'ForwardData': grpc.unary_unary_rpc_method_handler(
                     servicer.ForwardData,
                     request_deserializer=mini2__pb2.CollisionData.FromString,
+                    response_serializer=mini2__pb2.Empty.SerializeToString,
+            ),
+            'PropagateCompletion': grpc.unary_unary_rpc_method_handler(
+                    servicer.PropagateCompletion,
+                    request_deserializer=mini2__pb2.Empty.FromString,
                     response_serializer=mini2__pb2.Empty.SerializeToString,
             ),
     }
@@ -165,6 +224,33 @@ class InterServerService(object):
             target,
             '/mini2.InterServerService/ForwardData',
             mini2__pb2.CollisionData.SerializeToString,
+            mini2__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PropagateCompletion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/mini2.InterServerService/PropagateCompletion',
+            mini2__pb2.Empty.SerializeToString,
             mini2__pb2.Empty.FromString,
             options,
             channel_credentials,

@@ -7,7 +7,7 @@ import mini2_pb2_grpc
 
 
 class CollisionDataClient:
-    def __init__(self, server_address="169.254.181.194:50056"):
+    def __init__(self, server_address="localhost:50056"):
         self.server_address = server_address
         # Create gRPC channel
         self.channel = grpc.insecure_channel(server_address)
@@ -68,6 +68,11 @@ class CollisionDataClient:
                 print(
                     f"Client starting at line {start_line}: Total records processed: {total_records}"
                 )
+            try:
+                self.stub.SignalCompletion(mini2_pb2.Empty())
+                print(f"Client starting at line {start_line}: Sent completion signal")
+            except grpc.RpcError as e:
+                print(f"Error sending completion signal: {e}")
 
         except FileNotFoundError:
             print(f"Error: Could not find CSV file at {csv_file_path}")
@@ -120,6 +125,14 @@ def main():
 
     end_time = time.time()
     print(f"Data streaming completed in {end_time - start_time:.2f} seconds")
+    final_client = CollisionDataClient()
+    try:
+        final_client.stub.SignalCompletion(mini2_pb2.Empty())
+        print("Final completion signal sent")
+    except grpc.RpcError as e:
+        print(f"Error sending final completion signal: {e}")
+    finally:
+        final_client.channel.close()
 
 if __name__ == "__main__":
     main()

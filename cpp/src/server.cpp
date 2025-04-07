@@ -103,6 +103,12 @@ public:
         }
     }
 
+    // Add this to the public section of SharedMemoryManager class
+    SharedMemoryBuffer* getBuffer() const {
+        return buffer_;
+    }
+
+
     // Write a message (string) to the circular buffer.
     bool writeMessage(const std::string &msg)
     {
@@ -193,7 +199,10 @@ struct ProcessNode
 class GenericServer : public EntryPointService::Service, public InterServerService::Service
 {
 private:
-    std::mutex stub_mutex_;
+    std::atomic<int> completion_signals_received{0};
+    std::atomic<bool> final_completion_received{false};
+    std::atomic<int> active_grpc_calls{0};
+
     // Server configuration.
     std::string server_id;
     std::string server_address;
@@ -231,6 +240,41 @@ private:
     // Flag indicating if this server is the entry point.
     bool entry_point_flag;
 
+    void PropagateCompletionToChildren() {
+        for (const auto& conn : connections) {
+            ClientContext context;
+            Empty request, response;
+            Status status = server_stubs[conn]->PropagateCompletion(&context, request, &response);
+            if (!status.ok()) {
+                std::cerr << "Failed to propagate completion to " << conn << std::endl;
+            }
+        }
+        ProcessFinalData();
+    }
+
+    void ProcessFinalData() {
+        // Wait for any ongoing processing to complete
+        while (active_grpc_calls > 0 || !checkAllBuffersEmpty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // Your final processing logic here
+        std::cout << "Server " << server_id << " is performing final data processing" << std::endl;
+        // Example: Analyze collision_refs, generate reports, etc.
+        reportDistributionStats();
+        SpatialAnalysis analysis(100, 10);
+        analysis.processCollisions(collision_refs);
+        analysis.identifyHighRiskAreas();
+    }
+
+    bool checkAllBuffersEmpty() {
+        for (const auto& [conn, mgr] : incomingShmManagers) {
+            if (mgr->getBuffer()->header.read_index != mgr->getBuffer()->header.write_index) {
+                return false;
+            }
+        }
+        return true;
+    }
     // Write a message (serialized CollisionData) to shared memory.
     bool writeToSharedMemory(const std::string &connection_id, const CollisionData &data)
     {
@@ -272,6 +316,7 @@ private:
     // Forward data to a connected server via gRPC.
     void forwardDataToServer(const std::string &srv_id, const CollisionData &collision)
     {
+        active_grpc_calls++;
         // Ensure the stub for the target server exists.
         if (server_stubs.find(srv_id) == server_stubs.end() || !server_stubs[srv_id])
         {
@@ -280,6 +325,7 @@ private:
             if (server_stubs.find(srv_id) == server_stubs.end() || !server_stubs[srv_id])
             {
                 std::cerr << "ERROR: Failed to initialize GRPC stub for server " << srv_id << std::endl;
+                active_grpc_calls--;
                 return;
             }
         }
@@ -291,6 +337,7 @@ private:
         {
             std::cerr << "Failed to forward data to " << srv_id << ": " << status.error_message() << std::endl;
         }
+        active_grpc_calls--;
     }
 
     size_t getHash(const CollisionData &data)
@@ -658,6 +705,43 @@ public:
         reportDistributionStats();
     }
 
+    Status SignalCompletion(ServerContext* context, const Empty* request, Empty* response) override {
+        completion_signals_received++;
+        if (completion_signals_received == 3) {  // Assuming 3 client processes
+            final_completion_received = true;
+            PropagateCompletionToChildren();
+        }
+        return Status::OK;
+    }
+
+    Status PropagateCompletion(ServerContext* context, const Empty* request, Empty* response) override {
+        bool was_first = !final_completion_received.exchange(true);
+        std::cout << "Server " << server_id << " received completion signal" << std::endl;
+    
+        if (was_first) {
+            // This is the first time we've received the completion signal
+            std::cout << "Server " << server_id << " processing completion signal" << std::endl;
+            
+            // Propagate to children first
+            for (const auto& child : connections) {
+                ClientContext ctx;
+                Empty req, resp;
+                Status status = server_stubs[child]->PropagateCompletion(&ctx, req, &resp);
+                if (!status.ok()) {
+                    std::cerr << "Failed to propagate completion to " << child << ": " << status.error_message() << std::endl;
+                }
+            }
+    
+            // Then process our own data
+            ProcessFinalData();
+        } else {
+            std::cout << "Server " << server_id << " already processed completion, ignoring" << std::endl;
+        }
+    
+        return Status::OK;
+    }
+    
+
     // Handle incoming collision data from Python client (entry point).
     Status StreamCollisions(ServerContext *context,
                             grpc::ServerReader<CollisionData> *reader,
@@ -733,7 +817,6 @@ public:
         {
             std::cout << "  Sent to " << stat.first << ": " << stat.second << " records" << std::endl;
         }
-        reportDistributionStats();
         return Status::OK;
     }
 
@@ -742,23 +825,18 @@ public:
                        const CollisionData *collision,
                        Empty *response) override
     {
+        active_grpc_calls++;
         std::cout << "Received data from another server" << std::endl;
         total_records_seen += 1;
         size_t hash_value = getHash(*collision);
-        if (shouldKeepLocally(hash_value))
+        if (shouldKeepLocally(hash_value) && connections.empty())
         {
             CollisionData collision_copy=*collision;
             std::cout<<collision_copy.borough()<<"  "<<collision_copy.zip_code()<<"  "<<collision_copy.crash_date()<<"  "<<collision_copy.crash_time()<<std::endl;
             collision_refs.emplace_back(collision_copy);
             records_kept_locally++;
+            active_grpc_calls--;
             return Status::OK; // process collision data
-        }
-        if (connections.empty())
-        {
-            // This is a leaf node, so we should keep the data locally
-            // instead of trying to forward it
-            records_kept_locally++;
-            return Status::OK;
         }
         std::string target_server = chooseTargetServer(hash_value);
         if (!target_server.empty())
@@ -772,6 +850,7 @@ public:
             {
                 if (!g_simulate_grpc_failure)
                 {
+                    active_grpc_calls--;
                     forwardDataToServer(target_server, *collision);
                 }
                 else
@@ -780,6 +859,7 @@ public:
                 }
             }
         }
+        active_grpc_calls--;
         reportDistributionStats();
         return Status::OK;
     }

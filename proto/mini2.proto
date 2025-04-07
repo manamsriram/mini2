@@ -54,12 +54,18 @@ message AnalysisRecord {
 service EntryPointService {
     // Defines how clients stream data to Server A
     rpc StreamCollisions(stream CollisionData) returns (Empty) {}
+
+    rpc SignalCompletion(Empty) returns (Empty) {}
+
 }
 
 // Service for inter-server communication (A,B,C,D,E)
 service InterServerService {
     // Forward data between servers
     rpc ForwardData(CollisionData) returns (Empty) {}
+
+    rpc PropagateCompletion(Empty) returns (Empty) {}
+
 }
 
 message Empty {}
