@@ -4,12 +4,14 @@
 #include <map>
 #include <string>
 #include <vector>
-#include "./parser/CSV.h"
+#include "CSV.h"
+#include "proto/mini2.grpc.pb.h"
+#include "proto/mini2.pb.h"
 
 class SpatialAnalysis {
 public:
     SpatialAnalysis(int injuryThreshold, int deathThreshold);
-    void processCollisions(const std::vector<CSVRow>& data);
+    void processCollisions(const std::vector<mini2::CollisionData>& data);
     void identifyHighRiskAreas() const;
 
 private:
@@ -29,7 +31,7 @@ private:
         bool hasReducedRisk;
     };
 
-    std::map<std::string, std::map<int, AreaStats>> boroughZipStats;
+    std::map<std::string, std::map<std::string, AreaStats>> boroughZipStats;
     const int INJURY_THRESHOLD;
     const int DEATH_THRESHOLD;
 

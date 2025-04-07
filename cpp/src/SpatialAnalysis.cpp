@@ -1,31 +1,32 @@
 #include "./parser/CSV.h"
-#include "SpatialAnalysis.h"
+#include "../include/parser/SpatialAnalysis.h"
 #include <iostream>
 #include <algorithm>
+#include "proto/mini2.grpc.pb.h"
+#include "proto/mini2.pb.h"
 
 SpatialAnalysis::SpatialAnalysis(int injuryThreshold, int deathThreshold)
     : INJURY_THRESHOLD(injuryThreshold), DEATH_THRESHOLD(deathThreshold) {}
 
-void SpatialAnalysis::processCollisions(const std::vector<CSVRow>& data) {
-    for (const auto& row : data) {
-        if (!row.borough.empty() && row.zip_code > 0) {
-            int year = extractYear(row.crash_date);
-            auto& areaStats = boroughZipStats[row.borough][row.zip_code];
-            
-            auto it = std::lower_bound(areaStats.yearlyStats.begin(), areaStats.yearlyStats.end(), year,
-                [](const YearlyStats& stats, int y) { return stats.year < y; });
-            
-            if (it == areaStats.yearlyStats.end() || it->year != year) {
-                it = areaStats.yearlyStats.insert(it, {year, 0, 0, 0});
+    void SpatialAnalysis::processCollisions(const std::vector<mini2::CollisionData>& data) {
+        for (const auto& row : data) {
+            if (!row.borough().empty() && !row.zip_code().empty()) {
+                int year = extractYear(row.crash_date());
+                auto& areaStats = boroughZipStats[row.borough()][row.zip_code()];
+                
+                auto it = std::lower_bound(areaStats.yearlyStats.begin(), areaStats.yearlyStats.end(), year,
+                    [](const YearlyStats& stats, int y) { return stats.year < y; });
+                
+                if (it == areaStats.yearlyStats.end() || it->year != year) {
+                    it = areaStats.yearlyStats.insert(it, {year, 0, 0, 0});
+                }
+                
+                it->collisionCount++;
+                it->injuryCount += std::max(0, row.number_of_persons_injured());
+                it->deathCount += std::max(0, row.number_of_persons_killed());
             }
-            
-            it->collisionCount++;
-            it->injuryCount += std::max(0, row.persons_injured);
-            it->deathCount += std::max(0, row.persons_killed);
         }
-    }
-}
-    
+    }    
     
 void SpatialAnalysis::identifyHighRiskAreas() const {
     std::cout << "Risk assessment by borough and zip code:\n";

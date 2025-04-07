@@ -25,6 +25,7 @@ message CollisionData {
     int32 number_of_cyclist_killed = 16;
     int32 number_of_motorist_injured = 17;
     int32 number_of_motorist_killed = 18;
+    int32 year=30;
 
     // Vehicle Information
     string contributing_factor_vehicle_1 = 19;

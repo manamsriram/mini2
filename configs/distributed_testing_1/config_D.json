@@ -1,36 +1,36 @@
 {
     "server_id": "D",
-    "address": "0.0.0.0",
+    "address": "169.254.4.46",
     "port": 50054,
     "is_entry_point": false,
     "network": [
       {
         "id": "A",
-        "address": "127.0.0.1",
-        "port": 50051,
+        "address": "169.254.181.194",
+        "port": 50056,
         "connections": ["B"]
       },
       {
         "id": "B",
-        "address": "127.0.0.1",
+        "address": "169.254.181.194",
         "port": 50052,
         "connections": ["C", "D"]
       },
       {
         "id": "C",
-        "address": "10.0.0.2",
+        "address": "169.254.4.46",
         "port": 50053,
         "connections": ["E"]
       },
       {
         "id": "D",
-        "address": "10.0.0.2",
+        "address": "169.254.4.46",
         "port": 50054,
         "connections": ["E"]
       },
       {
         "id": "E",
-        "address": "10.0.0.2",
+        "address": "169.254.4.46",
         "port": 50055,
         "connections": []
       }

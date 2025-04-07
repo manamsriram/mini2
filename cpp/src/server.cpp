@@ -3,13 +3,10 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <unordered_map>
 #include <fstream>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/types.h>
-#include <thread>
-#include <chrono>
 #include <atomic>
 #include <mutex>
 #include <iostream>
@@ -19,10 +16,12 @@
 #include <csignal>
 #include <chrono>
 #include <thread>
+#include <functional>
 
 #include "proto/mini2.grpc.pb.h"
 #include "proto/mini2.pb.h"
-#include "parser/CSV.h"
+#include "../include/parser/CSV.h"
+#include "../include/parser/SpatialAnalysis.h"
 
 using json = nlohmann::json;
 using grpc::Channel;
@@ -57,6 +56,8 @@ struct SharedMemoryBuffer
     SharedMemoryHeader header;
     SharedMemorySlot slots[NUM_SLOTS];
 };
+
+std::vector<mini2::CollisionData> collision_refs;
 
 // Booleans for testing failure of shared memory and grpc
 static bool g_simulate_shm_failure = false;
@@ -115,18 +116,31 @@ public:
             std::cerr << "Message too large." << std::endl;
             return false;
         }
-        int write = buffer_->header.write_index;
-        int read = buffer_->header.read_index;
-        if (((write + 1) % buffer_->header.capacity) == read)
+        // Try multiple times if buffer is full
+        const int MAX_ATTEMPTS = 5;
+        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++)
         {
-            std::cerr << "Shared memory buffer full." << std::endl;
-            return false;
+            int write = buffer_->header.write_index;
+            int read = buffer_->header.read_index;
+
+            if (((write + 1) % buffer_->header.capacity) == read)
+            {
+                // Buffer is full, wait a bit before retrying
+                if (attempt < MAX_ATTEMPTS - 1)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
+                std::cerr << "Shared memory buffer full after " << MAX_ATTEMPTS << " attempts." << std::endl;
+                return false;
+            }
+            SharedMemorySlot &slot = buffer_->slots[write];
+            slot.msg_len = msg.size();
+            std::memcpy(slot.data, msg.data(), msg.size());
+            buffer_->header.write_index = (write + 1) % buffer_->header.capacity;
+            return true;
         }
-        SharedMemorySlot &slot = buffer_->slots[write];
-        slot.msg_len = msg.size();
-        std::memcpy(slot.data, msg.data(), msg.size());
-        buffer_->header.write_index = (write + 1) % buffer_->header.capacity;
-        return true;
+        return false; // Should not reach here.
     }
 
     // Read a message from the circular buffer.
@@ -230,7 +244,7 @@ private:
         return outgoingShmManagers[connection_id]->writeMessage(serialized_data);
     }
 
-    // Read a message from shared memory and deserialize into CollisionData.
+    // Read a message from shared memory and deserialize into CollisionData. Flag for removal
     bool readFromSharedMemory(const std::string &connection_id, CollisionData &data)
     {
         if (incomingShmManagers.find(connection_id) == incomingShmManagers.end())
@@ -245,8 +259,6 @@ private:
         }
         return data.ParseFromString(msg);
     }
-
-
 
     // Initialize a gRPC channel (stub) to another server.
     void initServerStub(const std::string &server_id)
@@ -278,12 +290,12 @@ private:
         if (!status.ok())
         {
             std::cerr << "Failed to forward data to " << srv_id << ": " << status.error_message() << std::endl;
-        }   
+        }
     }
 
     size_t getHash(const CollisionData &data)
     {
-        std::string key = data.borough() + data.zip_code() + data.crash_date() +
+        std::string key = data.borough() + data.crash_date() +
                           data.crash_time();
         size_t hash_value = std::hash<std::string>{}(key);
         static std::random_device rd;
@@ -399,23 +411,18 @@ private:
                 // Spawns a reader thread to drain data from this parent's outgoing channel.
                 readerThreads.emplace_back([this, parent_id]()
                                            {
-                int drainCount = 0;
                 CollisionData collision;
+                int consecutive_failures = 0;
                 while (running_) {
                     std::string msg;
                     
                     if (incomingShmManagers[parent_id]->readMessage(msg))
                     {
+                        consecutive_failures = 0;  // Reset failure counter on success
                         if (collision.ParseFromString(msg))
                         {
                             // For testing, we simply drain the message.
-                            drainCount++;
                             total_records_seen.fetch_add(1, std::memory_order_relaxed);
-
-                            if (drainCount % 1000 == 0)
-                            {
-                                std::cout << "Drained " << drainCount << " messages from parent's (" << parent_id << ") channel" << std::endl;
-                            }
                             size_t hash_value = getHash(collision);
                             // If this node has no children, don't attempt forwarding.
                             if (!connections.empty() && !shouldKeepLocally(hash_value))
@@ -461,17 +468,20 @@ private:
                             else
                             {
                                 // keep data locally
+                                std::cout<<collision.borough()<<"  "<<collision.zip_code()<<"  "<<collision.crash_date()<<"  "<<collision.crash_time()<<std::endl;
+                                collision_refs.emplace_back(collision);
                                 records_kept_locally.fetch_add(1, std::memory_order_relaxed);
-                            }
-                            // Once every 1000 messages, print the distribution report.
-                            if (drainCount % 10000 == 0)
-                            {
-                                reportDistributionStats();
                             }
                         }
                     }
                     else {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        consecutive_failures++;
+                        // If we've had too many consecutive failures, sleep longer
+                        if (consecutive_failures > 100) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        } else {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        }
                     }
                 } });
             }
@@ -570,6 +580,8 @@ public:
     GenericServer(const std::string &config_path)
         : entry_point_flag(false)
     {
+        collision_refs.reserve(2000000); // Reserve space for 2 million elements.
+
         if (g_expected_total_dataset_size > 0)
         {
             total_dataset_size = g_expected_total_dataset_size;
@@ -643,6 +655,7 @@ public:
                 t.join();
             }
         }
+        reportDistributionStats();
     }
 
     // Handle incoming collision data from Python client (entry point).
@@ -669,51 +682,43 @@ public:
                 std::cout << "Received " << count << " records" << std::endl;
             }
             size_t hash_value = getHash(collision);
-            bool keep_locally = shouldKeepLocally(hash_value);
-            if (keep_locally)
+            if (shouldKeepLocally(hash_value))
             {
+                collision_refs.emplace_back(collision);
                 records_kept_locally.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
             std::string target_server = chooseTargetServer(hash_value);
-
-            if (!target_server.empty())
+            routing_stats[target_server]++;
             {
-                routing_stats[target_server]++;
+                std::lock_guard<std::mutex> lock(metricsMutex);
+                records_forwarded[target_server]++;
+            }
+            bool target_local = (network_nodes[target_server].address == network_nodes[server_id].address);
+            if (target_local && outgoingShmManagers.find(target_server) != outgoingShmManagers.end() &&
+                writeToSharedMemory(target_server, collision))
+            {
+                if (count % 500 == 0)
                 {
-                    std::lock_guard<std::mutex> lock(metricsMutex);
-                    records_forwarded[target_server]++;
-                }
-                bool target_local = (network_nodes[target_server].address == network_nodes[server_id].address);
-                if (target_local && outgoingShmManagers.find(target_server) != outgoingShmManagers.end() &&
-                    writeToSharedMemory(target_server, collision))
-                {
-                    if (count % 500 == 0)
-                    {
-                        std::cout << "Data written to shared memory for " << target_server << std::endl;
-                    }
-                }
-                else
-                {
-                    if (!g_simulate_grpc_failure)
-                    {
-                        forwardDataToServer(target_server, collision);
-                        if (count % 500 == 0)
-                        {
-                            std::cout << "Data sent via gRPC to " << target_server << std::endl;
-                        }
-                    }
-                    else
-                    {
-                        // Here for testing. In prod should be removed
-                        // std::cout << "GRPC failover off." << std::endl;
-                        // std::cout << "Data to be sent to " << target_server << " Skipped" << std::endl;
-                    }
+                    std::cout << "Data written to shared memory for " << target_server << std::endl;
                 }
             }
             else
             {
-                std::cout << "No route available, keeping record locally" << std::endl;
+                if (!g_simulate_grpc_failure)
+                {
+                    forwardDataToServer(target_server, collision);
+                    if (count % 500 == 0)
+                    {
+                        std::cout << "Data sent via gRPC to " << target_server << std::endl;
+                    }
+                }
+                else
+                {
+                    // Here for testing. In prod should be removed
+                    // std::cout << "GRPC failover off." << std::endl;
+                    // std::cout << "Data to be sent to " << target_server << " Skipped" << std::endl;
+                }
             }
             if (entry_count % 1000 == 0)
             {
@@ -742,9 +747,18 @@ public:
         size_t hash_value = getHash(*collision);
         if (shouldKeepLocally(hash_value))
         {
+            CollisionData collision_copy=*collision;
+            std::cout<<collision_copy.borough()<<"  "<<collision_copy.zip_code()<<"  "<<collision_copy.crash_date()<<"  "<<collision_copy.crash_time()<<std::endl;
+            collision_refs.emplace_back(collision_copy);
             records_kept_locally++;
-            std::cout<<collision->borough()<<"  "<<collision->zip_code()<<"  "<<collision->crash_date()<<"  "<<collision->crash_time()<<std::endl;
-            return Status::OK;//process collision data
+            return Status::OK; // process collision data
+        }
+        if (connections.empty())
+        {
+            // This is a leaf node, so we should keep the data locally
+            // instead of trying to forward it
+            records_kept_locally++;
+            return Status::OK;
         }
         std::string target_server = chooseTargetServer(hash_value);
         if (!target_server.empty())
@@ -781,7 +795,6 @@ public:
     {
         return entry_point_flag;
     }
-    
 };
 
 // ---------------------------------------------------------------------------
